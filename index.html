@@ -246,6 +246,22 @@
         .info-card h3 { font-size: 14px; margin-bottom: 10px; }
         .info-card ol, .info-card ul { padding-left: 20px; font-size: 13px; line-height: 1.9; color: var(--text-muted); }
         .info-card li strong { color: var(--text); }
+        /* ── Home button ── */
+        .home-btn {
+            background: var(--card-bg); border: 1px solid var(--border);
+            border-radius: 6px; color: var(--text-muted);
+            padding: 6px 13px; font-size: 13px; cursor: pointer;
+            transition: all 0.15s; font-family: inherit; flex-shrink: 0;
+        }
+        .home-btn:hover { border-color: var(--accent); color: var(--accent); }
+        /* ── Download button ── */
+        .dl-btn {
+            margin-left: auto; background: var(--card-bg);
+            border: 1px solid var(--border); border-radius: 6px;
+            color: var(--text-muted); padding: 4px 11px; font-size: 12px;
+            cursor: pointer; transition: all 0.15s; font-family: inherit;
+        }
+        .dl-btn:hover { border-color: var(--success); color: var(--success); }
         /* Scrollbar */
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
@@ -271,6 +287,7 @@
         <h1>DevOps &amp; Linux Notes</h1>
         <span class="subtitle">Personal Knowledge Base</span>
     </div>
+    <button class="home-btn" onclick="goHome()" title="Back to Home">🏠 Home</button>
     <div class="search-wrap">
         <span class="si">🔍</span>
         <input type="text" id="searchInput" placeholder="Search topics &amp; lessons…" oninput="handleSearch(this.value)">
@@ -363,58 +380,62 @@ async function fetchJSON(url) {
 }
 
 /* ── State ── */
-let currentRepo    = null;
-let currentLessons = [];
+let currentRepo      = null;
+let currentLessons   = [];
+let currentLessonIdx = 0;
+let currentLessonRaw = '';
 
 /* ── Init ── */
 async function init() {
     if (!detectUser()) { showLocalInfo(); return; }
-    buildSidebar();
+    await buildSidebar();
     handleHash();
 }
 
-/* ── Build sidebar from REPOS list (no API call needed) ── */
-function buildSidebar() {
-    const topicList  = document.getElementById('topicList');
+/* ── Build sidebar: check GitHub — only show repos that actually exist ── */
+async function buildSidebar() {
+    const topicList   = document.getElementById('topicList');
     const welcomeGrid = document.getElementById('welcomeGrid');
-    topicList.innerHTML  = '';
+    topicList.innerHTML   = '<div class="loading"><div class="spinner"></div></div>';
     welcomeGrid.innerHTML = '';
 
-    REPOS.forEach(repo => {
+    // Check all repos in parallel — skip any that return 404 / are private
+    const results = await Promise.all(
+        REPOS.map(repo =>
+            fetch(`https://api.github.com/repos/${GITHUB_USER}/${repo}/contents/?ref=${BRANCH}`, { headers: apiHeaders() })
+                .then(r => r.ok ? r.json().then(items => ({ repo, items })) : null)
+                .catch(() => null)
+        )
+    );
+
+    topicList.innerHTML = '';
+    const available = results.filter(Boolean);
+
+    if (available.length === 0) {
+        topicList.innerHTML = `<div style="padding:12px;color:var(--text-muted);font-size:12px">No topic repos found yet.</div>`;
+        return;
+    }
+
+    available.forEach(({ repo, items }) => {
         const ico     = icon(repo);
         const display = cap(repo);
+        const n       = items.filter(i => i.name.endsWith('.md') || i.name.endsWith('.txt') || i.name.endsWith('.sh')).length;
 
         // Sidebar item
         const div = document.createElement('div');
-        div.className  = 'topic-item';
+        div.className    = 'topic-item';
         div.dataset.repo = repo;
-        div.innerHTML  = `<span class="t-icon">${ico}</span><span>${display}</span><span class="t-badge" id="badge-${repo}">…</span>`;
-        div.onclick    = () => selectRepo(repo);
+        div.innerHTML    = `<span class="t-icon">${ico}</span><span>${display}</span><span class="t-badge" id="badge-${repo}">${n || '–'}</span>`;
+        div.onclick      = () => selectRepo(repo);
         topicList.appendChild(div);
 
         // Welcome grid card
         const card = document.createElement('div');
         card.className = 'topic-card';
-        card.innerHTML = `<div class="tc-icon">${ico}</div><div class="tc-name">${display}</div>`;
+        card.innerHTML = `<div class="tc-icon">${ico}</div><div class="tc-name">${display}</div><div style="font-size:10px;color:var(--text-muted);margin-top:4px">${n} lesson${n !== 1 ? 's' : ''}</div>`;
         card.onclick   = () => selectRepo(repo);
         welcomeGrid.appendChild(card);
-
-        // Fetch lesson count in background
-        countLessons(repo);
     });
-}
-
-async function countLessons(repo) {
-    try {
-        const url   = `https://api.github.com/repos/${GITHUB_USER}/${repo}/contents/?ref=${BRANCH}`;
-        const items = await fetchJSON(url);
-        const n     = items.filter(i => i.name.endsWith('.md') || i.name.endsWith('.txt') || i.name.endsWith('.sh')).length;
-        const el    = document.getElementById(`badge-${repo}`);
-        if (el) el.textContent = n || '–';
-    } catch(_) {
-        const el = document.getElementById(`badge-${repo}`);
-        if (el) el.textContent = '–';
-    }
 }
 
 /* ── Select a repo → load its files ── */
@@ -480,6 +501,9 @@ async function selectLesson(lesson, idx) {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const text   = await res.text();
 
+        currentLessonIdx = idx;
+        currentLessonRaw = text;
+
         const display = cap(safeName(lesson.name));
         let bodyHtml  = lesson.name.endsWith('.md')
             ? marked.parse(text)
@@ -498,6 +522,7 @@ async function selectLesson(lesson, idx) {
                 <span>${icon(currentRepo)} ${cap(currentRepo)}</span>
                 <span class="sep">›</span>
                 <span class="crumb-active">${display}</span>
+                <button class="dl-btn" onclick="downloadLesson()" title="Download ${lesson.name}">⬇ Download</button>
             </div>`;
 
         showArticle(breadcrumb + `<div class="markdown-body">${bodyHtml}${navHtml}</div>`);
@@ -567,6 +592,26 @@ function showLocalInfo() {
         </div>`;
 }
 
+function goHome() {
+    document.querySelectorAll('.topic-item').forEach(el => el.classList.remove('active'));
+    document.getElementById('lessonsPanel').style.display = 'none';
+    showWelcome();
+    history.replaceState(null, '', window.location.pathname);
+}
+
+function downloadLesson() {
+    if (!currentLessonRaw) return;
+    const filename = currentLessons[currentLessonIdx]?.name || 'notes.md';
+    const blob = new Blob([currentLessonRaw], { type: 'text/markdown' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
 function handleSearch(q) {
     q = q.toLowerCase();
     document.querySelectorAll('.topic-item').forEach(el => {
@@ -595,5 +640,4 @@ marked.setOptions({ breaks: true, gfm: true });
 init();
 </script>
 </body>
-</html>
 </html>
